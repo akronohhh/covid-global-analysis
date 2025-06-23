@@ -1,0 +1,145 @@
+---
+title: "COVID-19 Global Analysis Using Johns Hopkins Dataset"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 4
+)
+library(tidyverse)
+library(lubridate)
+library(countrycode)
+library(forecast)
+library(scales)
+```
+
+## Research Question
+
+**How has the spread and fatality rate of COVID-19 evolved across continents, and what can we forecast about its global trend?**
+
+## Data Source and Description
+
+- **Source**: [Johns Hopkins CSSE COVID-19 Dataset](https://github.com/CSSEGISandData/COVID-19)
+- **Files Used**:
+  - `time_series_covid19_confirmed_global.csv`
+  - `time_series_covid19_deaths_global.csv`
+- **Description**: This dataset contains daily cumulative counts of confirmed COVID-19 cases and deaths by country, beginning in January 2020.
+
+## Data Import and Preparation
+
+```{r data-import}
+url_confirmed <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+url_deaths <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
+
+confirmed_raw <- read_csv(url_confirmed)
+deaths_raw <- read_csv(url_deaths)
+
+confirmed <- confirmed_raw %>%
+  pivot_longer(cols = matches("^\\d"), names_to = "Date", values_to = "Confirmed") %>%
+  mutate(Date = mdy(Date))
+
+deaths <- deaths_raw %>%
+  pivot_longer(cols = matches("^\\d"), names_to = "Date", values_to = "Deaths") %>%
+  mutate(Date = mdy(Date))
+
+covid_data <- confirmed %>%
+  select(-Lat, -Long) %>%
+  left_join(deaths %>% select(-Lat, -Long),
+            by = c("Province/State", "Country/Region", "Date")) %>%
+  group_by(`Country/Region`, Date) %>%
+  summarise(
+    Confirmed = sum(Confirmed, na.rm = TRUE),
+    Deaths = sum(Deaths, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(Continent = countrycode(`Country/Region`, "country.name", "continent"))
+```
+
+## Exploratory Data Analysis
+
+### Global Cumulative Cases and Deaths
+
+```{r global-trends}
+covid_global <- covid_data %>%
+  group_by(Date) %>%
+  summarise(Confirmed = sum(Confirmed), Deaths = sum(Deaths), .groups = "drop")
+
+ggplot(covid_global, aes(x = Date)) +
+  geom_line(aes(y = Confirmed), color = "steelblue") +
+  geom_line(aes(y = Deaths), color = "firebrick") +
+  labs(
+    title = "Cumulative Global COVID-19 Cases and Deaths",
+    x = "Date",
+    y = "Number of People",
+    caption = "Data: Johns Hopkins CSSE"
+  ) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+### Case Fatality Rate (CFR) by Continent
+
+```{r cfr-continent}
+cfr_data <- covid_data %>%
+  filter(!is.na(Continent)) %>%
+  group_by(Date, Continent) %>%
+  summarise(Confirmed = sum(Confirmed), Deaths = sum(Deaths), .groups = "drop") %>%
+  mutate(CFR = Deaths / Confirmed)
+
+ggplot(cfr_data, aes(x = Date, y = CFR, color = Continent)) +
+  geom_line() +
+  scale_y_continuous(labels = percent_format(accuracy = 0.1)) +
+  labs(
+    title = "COVID-19 Case Fatality Rate by Continent",
+    x = "Date",
+    y = "CFR (%)",
+    caption = "CFR = Deaths / Confirmed Cases"
+  ) +
+  theme_minimal()
+```
+
+## Modeling and Forecasting
+
+### 30-Day Forecast Using ARIMA
+
+```{r arima-forecast}
+ts_confirmed <- ts(covid_global$Confirmed, frequency = 7)
+fit <- auto.arima(ts_confirmed)
+fc <- forecast(fit, h = 30)
+
+autoplot(fc) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Forecast of Global Confirmed COVID-19 Cases (Next 30 Days)",
+    x = "Time (in Weeks)",
+    y = "Cumulative Confirmed Cases",
+    caption = "ARIMA forecast based on past cumulative data"
+  ) +
+  theme_minimal()
+```
+
+## Limitations and Biases
+
+- **Underreporting**: Some countries may lack resources for widespread testing.
+- **Reporting Lag**: Case and death numbers may not be reported in real time.
+- **Data Gaps**: Incomplete or inconsistent data for certain regions.
+- **Forecasting Model Limitations**: ARIMA assumes historical patterns continue, which may not hold under new policy changes or variants.
+
+## Conclusion
+
+This analysis demonstrates temporal trends and differences in case fatality across continents. While ARIMA provides a basic predictive tool, real-world events like new variants and public health interventions must be considered to interpret the results accurately.
+
+## References
+
+1. Johns Hopkins University CSSE. (2025). COVID-19 Data Repository. [GitHub](https://github.com/CSSEGISandData/COVID-19)
+2. Hyndman, R.J., & Athanasopoulos, G. (2018). *Forecasting: Principles and Practice*. OTexts.
